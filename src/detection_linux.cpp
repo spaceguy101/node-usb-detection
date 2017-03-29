@@ -1,8 +1,9 @@
 #include <libudev.h>
 #include <poll.h>
-
+#include <mntent.h>
 #include "detection.h"
 #include "deviceList.h"
+#include <unistd.h>
 
 using namespace std;
 
@@ -13,7 +14,7 @@ using namespace std;
  **********************************/
 #define DEVICE_ACTION_ADDED "add"
 #define DEVICE_ACTION_REMOVED "remove"
-
+#define DEVICE_TYPE_PARTITION "partition"
 #define DEVICE_TYPE_DEVICE "usb_device"
 
 #define DEVICE_PROPERTY_NAME "ID_MODEL"
@@ -151,6 +152,10 @@ static ListResultItem_t* GetProperties(struct udev_device* dev, ListResultItem_t
 		else if(strcmp(name, DEVICE_PROPERTY_VENDOR) == 0) {
 			item->manufacturer = value;
 		}
+		if (udev_device_get_devtype(dev) && !strcmp(udev_device_get_devtype(dev), DEVICE_TYPE_PARTITION) && !strcmp(udev_device_get_action(dev), DEVICE_ACTION_ADDED))
+           {
+                GetMountPath(dev, item);
+            }
 	}
 	item->vendorId = strtol(udev_device_get_sysattr_value(dev,"idVendor"), NULL, 16);
 	item->productId = strtol(udev_device_get_sysattr_value(dev,"idProduct"), NULL, 16);
@@ -158,6 +163,36 @@ static ListResultItem_t* GetProperties(struct udev_device* dev, ListResultItem_t
 	item->locationId = 0;
 
 	return item;
+}
+
+void GetMountPath(struct udev_device* dev, ListResultItem_t* item)
+{
+    struct mntent *mnt;
+    FILE          *fp      = NULL;
+    const char    *devNode = udev_device_get_devnode(dev);
+
+    // TODO: find a better way to replace waiting for a second
+    sleep(1);
+    if ((fp = setmntent("/proc/mounts", "r")) == NULL)
+    {
+        //TODO: sent error to js layer
+        //NanThrowError("Can't open mounted filesystems\n");
+        printf("Can't open mounted filesystems\n");
+        return;
+    }
+
+    while ((mnt = getmntent(fp)))
+    {
+        if (!strcmp(mnt->mnt_fsname, devNode))
+        {
+            item->mountPath = mnt->mnt_dir;
+        }
+    }
+
+    /* close file for describing the mounted filesystems */
+    endmntent(fp);
+
+    uv_async_send(&async_handler);
 }
 
 static void DeviceAdded(struct udev_device* dev) {
